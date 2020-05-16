@@ -85,26 +85,12 @@ func loadKeys(privKey, pubKeyPath string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, 
 	return &ecPriv, &ecPub, nil
 }
 
-func validateSignature(priv *ecdsa.PrivateKey, pub *ecdsa.PublicKey) (bool, error) {
-
-	var message = []byte("Ed elli avea del cul fatto trombetta")
-
-	h := sha256.New()
-	h.Write(message)
-	hash := h.Sum(nil)
-
-	r, s, err := ecdsa.Sign(bytes.NewReader(hash), priv, hash)
-	if err != nil {
-		return false, fmt.Errorf("could not sign message for validation: %v", err)
-	}
-	valid := ecdsa.Verify(pub, hash, r, s)
-	if !valid {
-		return false, nil
-	}
-	return true, nil
-}
-
 func validateKeypair(privKey, pubKeyPath string) (*ECKeyPairValidation, error) {
+
+	var (
+		message = []byte("Ed elli avea del cul fatto trombetta")
+		entropy = []byte("Not so random entropy...")
+	)
 
 	if len(privKey) == 0 {
 		return nil, fmt.Errorf("private key is required")
@@ -117,11 +103,25 @@ func validateKeypair(privKey, pubKeyPath string) (*ECKeyPairValidation, error) {
 		return nil, fmt.Errorf("could not load keys: %v", err)
 	}
 
-	valid, err := validateSignature(ecPriv, ecPub)
-	if err != nil {
-		return nil, fmt.Errorf("could not validate private/public keypair: %v", err)
+	hasher := sha256.New()
+	n, err := hasher.Write(message)
+	if n != len(message) {
+		return nil, fmt.Errorf("byte written less than expected: %d < %d", n, len(message))
 	}
 
-	kv := ECKeyPairValidation{X: ecPub.X, Y: ecPub.Y, Priv: ecPriv.D, Valid: valid}
-	return &kv, nil
+	if err != nil {
+		return nil, err
+	}
+
+	hash := hasher.Sum(nil)
+	r, s, err := ecdsa.Sign(bytes.NewReader(entropy), ecPriv, hash)
+	if err != nil {
+		return nil, fmt.Errorf("could not sign message for validation: %v", err)
+	}
+	valid := ecdsa.Verify(ecPub, hash, r, s)
+
+	if !valid {
+		return &ECKeyPairValidation{X: ecPub.X, Y: ecPub.Y, Priv: ecPriv.D, Valid: false}, nil
+	}
+	return &ECKeyPairValidation{X: ecPub.X, Y: ecPub.Y, Priv: ecPriv.D, Valid: valid}, nil
 }

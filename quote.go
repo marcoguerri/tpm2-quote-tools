@@ -3,17 +3,53 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/sha256"
+	"encoding/asn1"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
+	"io/ioutil"
+	"math/big"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+
+	log "github.com/sirupsen/logrus"
 )
+
+// Every piece of information produced and signed by the TPM follows the
+// TPMS_ATTEST structure (Trusted Platform Module Library, Part 2: Structures, 10.12.8).
+// Whether the blob contains data produced by TPM2_Quote is indicated by TPMI_ST_ATTEST
+// structure, which should have a value of TPM_ST_ATTEST_QUOTE.
+//
+// If the blob is a quote, what we are interested in is the TPMU_ATTEST structure.
+// Fields of the structure
+// magic 				TPM_GENERATED
+// type 				TPMI_ST_ATTEST
+// qualifiedSigner 		TPM2B_NAME
+// extraData 			TPM2B_DATA
+// clockInfo 			TPMS_CLOCK_INFO
+// firmwareVersion    	UINT64
+// [type]attested		TPMU_ATTEST
+//
+// With a TPM_ST_ATTEST_QUOTE selector, TPMU_ATTEST is structured as follows:
+// pcrSelect TPML_PCR_SELECTION
+// pcrDigest TPM2B_DIGEST
+
+type ecdsaSignature struct {
+	SigR, SigS *big.Int
+}
+
+func (s *ecdsaSignature) R() *big.Int {
+	return s.SigR
+}
+
+func (s *ecdsaSignature) S() *big.Int {
+	return s.SigS
+}
 
 type algo uint16
 
@@ -24,6 +60,7 @@ const (
 	tpmAlgNull        = 0x10
 )
 
+// magic field, TPM_GENERATED
 type magic uint32
 
 func (m *magic) MarshalJSON() ([]byte, error) {
@@ -37,6 +74,7 @@ func (m *magic) MarshalBinary() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+// type, TPMI_ST_ATTEST
 type stType uint16
 
 func (t *stType) MarshalJSON() ([]byte, error) {
@@ -50,11 +88,20 @@ func (t *stType) MarshalBinary() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+func (t *stType) UnmarshalBinary(data []byte) error {
+	b := bytes.NewBuffer(data)
+	return binary.Write(b, binary.BigEndian, *t)
+}
+
 type buffer []byte
 
 func (b *buffer) MarshalJSON() ([]byte, error) {
 	s := fmt.Sprintf("0x%x", *b)
 	return json.Marshal(s)
+}
+
+func (b *buffer) Equal(rhs []byte) bool {
+	return bytes.Equal(rhs, *b)
 }
 
 func (b *buffer) MarshalBinary() ([]byte, error) {
@@ -155,6 +202,10 @@ type tpm2bDigest struct {
 	Buffer buffer
 }
 
+func (d *tpm2bDigest) Equal(rhs []byte) bool {
+	return d.Buffer.Equal(rhs)
+}
+
 func (d *tpm2bDigest) MarshalBinary() ([]byte, error) {
 	var b bytes.Buffer
 	binary.Write(&b, binary.BigEndian, d.Size)
@@ -220,29 +271,7 @@ func (q *quote) MarshalBinary() ([]byte, error) {
 	return serialization, nil
 }
 
-// Every piece of information produced and signed by the TPM follows the
-// TPMS_ATTEST structure (Trusted Platform Module Library, Part 2: Structures, 10.12.8).
-// Whether the blob contains data produced by TPM2_Quote is indicated by TPMI_ST_ATTEST
-// structure, which should have a value of TPM_ST_ATTEST_QUOTE.
-//
-// If the blob is a quote, what we are interested in is the TPMU_ATTEST structure.
-// Fields of the structure
-// magic 				TPM_GENERATED
-// type 				TPMI_ST_ATTEST
-// qualifiedSigner 		TPM2B_NAME
-// extraData 			TPM2B_DATA
-// clockInfo 			TPMS_CLOCK_INFO
-// firmwareVersion    	UINT64
-// [type]attested		TPMU_ATTEST
-//
-// With a TPM_ST_ATTEST_QUOTE selector, TPMU_ATTEST is structured as follows:
-// pcrSelect TPML_PCR_SELECTION
-// pcrDigest TPM2B_DIGEST
 func readQuote(quotePath string) (*quote, error) {
-
-	if len(quotePath) == 0 {
-		return nil, fmt.Errorf("quote path not specified")
-	}
 
 	quoteFile, err := os.Open(quotePath)
 	if err != nil {
@@ -301,17 +330,17 @@ func readQuote(quotePath string) (*quote, error) {
 		return nil, fmt.Errorf("couldn't read firmware version: %v", err)
 	}
 
-	// PcrSelect->Count
+	// PcrSelect.Count
 	pcrSelect := &q.QuoteInfo.PcrSelect
 	if binary.Read(quoteFile, binary.BigEndian, &pcrSelect.Count); err != nil {
 		return nil, fmt.Errorf("couldn't read PcrSelect Count: %v", err)
 	}
-	// PcrSelect->PcrSelection->Hash
+	// PcrSelect.PcrSelection.Hash
 	if binary.Read(quoteFile, binary.BigEndian, &pcrSelect.PcrSelection.Hash); err != nil {
 		return nil, fmt.Errorf("couldn't read PcrSelection Hash: %v", err)
 	}
 
-	// PcrSelection->SizeofSelect
+	// PcrSelection.SizeofSelect
 	pcrSelection := &q.QuoteInfo.PcrSelect.PcrSelection
 	if binary.Read(quoteFile, binary.BigEndian, &pcrSelection.SizeofSelect); err != nil {
 		return nil, fmt.Errorf("couldn't read SizeofSelect: %v", err)
@@ -322,7 +351,7 @@ func readQuote(quotePath string) (*quote, error) {
 	}
 
 	pcrDigest := &q.QuoteInfo.PcrDigest
-	// PcrDigest->Size
+	// PcrDigest.Size
 	if binary.Read(quoteFile, binary.BigEndian, &pcrDigest.Size); err != nil {
 		return nil, fmt.Errorf("couldn't read quoteInfo.pcrDigest.size: %v", err)
 	}
@@ -333,11 +362,32 @@ func readQuote(quotePath string) (*quote, error) {
 	return &q, nil
 }
 
-func validateQuote(quote *quote, sigPath string) (bool, error) {
+func validateQuote(quote *quote, sigPath, privKey, pubKeyPath string) (bool, error) {
 	quoteSerialized, _ := quote.MarshalBinary()
-	sum := sha256.Sum256(quoteSerialized)
-	fmt.Printf("SHA reconstructed quote: %x\n", sum)
-	return false, nil
+	hash := sha256.Sum256(quoteSerialized)
+
+	log.Debugf("sha256sum calculated from quote: 0x%s", hex.EncodeToString(hash[:]))
+
+	// Deserialize the signature
+	log.Debugf("reading signature file at %s", sigPath)
+	sigRaw, err := ioutil.ReadFile(sigPath)
+	if err != nil {
+		return false, fmt.Errorf("could not read file containig signature: %v", err)
+	}
+
+	sig := ecdsaSignature{}
+	if _, err = asn1.Unmarshal(sigRaw, &sig); err != nil {
+		return false, fmt.Errorf("could not parse signature: %v", err)
+	}
+	log.Debugf("unmarshalled signature, r: %s, s: %s", sig.R().String(), sig.S().String())
+
+	_, ecPub, err := loadKeys(privKey, pubKeyPath)
+	if err != nil {
+		return false, fmt.Errorf("could not load keys: %v", err)
+	}
+
+	valid := ecdsa.Verify(ecPub, hash[:], sig.R(), sig.S())
+	return valid, nil
 }
 
 func calculatePcrDigest(pcrReadPath string) ([]byte, error) {
