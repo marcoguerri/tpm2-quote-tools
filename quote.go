@@ -88,28 +88,25 @@ func (t *stType) MarshalBinary() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func (t *stType) UnmarshalBinary(data []byte) error {
-	b := bytes.NewBuffer(data)
-	return binary.Write(b, binary.BigEndian, *t)
-}
-
+// buffer
 type buffer []byte
 
-func (b *buffer) MarshalJSON() ([]byte, error) {
-	s := fmt.Sprintf("0x%x", *b)
+func (b buffer) MarshalJSON() ([]byte, error) {
+	s := fmt.Sprintf("0x%x", b)
 	return json.Marshal(s)
 }
 
-func (b *buffer) Equal(rhs []byte) bool {
-	return bytes.Equal(rhs, *b)
+func (b buffer) Equal(rhs []byte) bool {
+	return bytes.Equal(rhs, b)
 }
 
-func (b *buffer) MarshalBinary() ([]byte, error) {
-	buff := make([]byte, len(*b))
-	copy(buff, *b)
+func (b buffer) MarshalBinary() ([]byte, error) {
+	buff := make([]byte, len(b))
+	copy(buff, b)
 	return buff, nil
 }
 
+// firmwareVersion
 type firmwareVersion uint64
 
 func (f *firmwareVersion) MarshalJSON() ([]byte, error) {
@@ -123,13 +120,14 @@ func (f *firmwareVersion) MarshalBinary() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+// pcrSelect
 type pcrSelect []byte
 
-func (p *pcrSelect) MarshalJSON() ([]byte, error) {
+func (p pcrSelect) MarshalJSON() ([]byte, error) {
 	pcrs := make([]string, 0)
-	for i := 0; i < len(*p); i++ {
+	for i := 0; i < len(p); i++ {
 		for j := uint8(0); j < 8; j++ {
-			if (*p)[i]&(uint8(0x1)<<j) != 0x0 {
+			if p[i]&(uint8(0x1)<<j) != 0x0 {
 				pcrs = append(pcrs, fmt.Sprintf("%d", i*8+int(j)))
 			}
 		}
@@ -137,12 +135,13 @@ func (p *pcrSelect) MarshalJSON() ([]byte, error) {
 	return json.Marshal(strings.Join(pcrs, ","))
 }
 
-func (p *pcrSelect) MarshalBinary() ([]byte, error) {
-	buff := make([]byte, len(*p))
-	copy(buff, *p)
+func (p pcrSelect) MarshalBinary() ([]byte, error) {
+	buff := make([]byte, len(p))
+	copy(buff, p)
 	return buff, nil
 }
 
+// tpmsPcrSelection
 type tpmsPcrSelection struct {
 	Hash         algo
 	SizeofSelect uint8
@@ -158,6 +157,7 @@ func (p tpmsPcrSelection) MarshalBinary() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+// tpmlPcrSelection
 type tpmlPcrSelection struct {
 	Count        uint32
 	PcrSelection tpmsPcrSelection
@@ -432,7 +432,6 @@ func calculatePcrDigest(pcrReadPath string) ([]byte, error) {
 		}
 	}
 	sum := sha256.Sum256(buffer)
-	log.Printf("Hash: %x\n", sum)
 
 	if err := scanner.Err(); err != nil {
 		log.Fatal(err)
@@ -442,4 +441,45 @@ func calculatePcrDigest(pcrReadPath string) ([]byte, error) {
 		return nil, fmt.Errorf("could not read pcr file: %v", err)
 	}
 	return sum[:], nil
+}
+
+func forgeQuote(quote *quote, pcrReadPath, privKey, pubKeyPath, sigOutPath, quoteOutPath string) error {
+
+	pcrHash, err := calculatePcrDigest(pcrReadPath)
+	if err != nil {
+		return err
+	}
+
+	quote.QuoteInfo.PcrDigest.Buffer = buffer(pcrHash)
+	quoteSerialized, _ := quote.MarshalBinary()
+	quoteHash := sha256.Sum256(quoteSerialized)
+
+	log.Debugf("signing 0x%s", hex.EncodeToString(quoteHash[:]))
+	ecPriv, _, err := loadKeys(privKey, pubKeyPath)
+	if err != nil {
+		return fmt.Errorf("could not load private key for signature: %v", err)
+	}
+
+	r, s, err := ecdsa.Sign(bytes.NewReader([]byte("Not so random entropy...")), ecPriv, quoteHash[:])
+	if err != nil {
+		return fmt.Errorf("could not sign quote hash: %v", err)
+	}
+
+	sig := ecdsaSignature{SigR: r, SigS: s}
+	sigMarshalled, err := asn1.Marshal(sig)
+	if err != nil {
+		return fmt.Errorf("could not marshal signature: %v", err)
+	}
+
+	log.Debugf("calculated signature, r: %s, s: %s", sig.R().String(), sig.S().String())
+
+	err = ioutil.WriteFile(sigOutPath, sigMarshalled, 0644)
+	if err != nil {
+		return fmt.Errorf("could not write signature: %v", err)
+	}
+	err = ioutil.WriteFile(quoteOutPath, quoteSerialized, 0644)
+	if err != nil {
+		return fmt.Errorf("could not write quote: %v", err)
+	}
+	return nil
 }

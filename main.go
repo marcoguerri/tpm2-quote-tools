@@ -12,8 +12,9 @@ import (
 func main() {
 
 	var (
-		privKey, pubKeyPath, privKeyPath string
-		quotePath, pcrReadPath, sigPath  string
+		privKey, pubKeyPath             string
+		quotePath, pcrReadPath, sigPath string
+		sigOutPath, quoteOutPath        string
 	)
 
 	log.SetOutput(os.Stdout)
@@ -32,9 +33,12 @@ func main() {
 	validateQuoteCmd.StringVar(&privKey, "privKey", "", "decimal representation of the private key")
 
 	forgeQuoteCmd := flag.NewFlagSet("forgeQuote", flag.ExitOnError)
-	forgeQuoteCmd.StringVar(&privKeyPath, "quotePath", "", "path of the quote")
+	forgeQuoteCmd.StringVar(&quotePath, "quotePath", "", "path of the quote")
+	forgeQuoteCmd.StringVar(&quoteOutPath, "quoteOutPath", "", "path of the output quote")
 	forgeQuoteCmd.StringVar(&pcrReadPath, "pcrReadPath", "", "path of a file containing PCR readings")
 	forgeQuoteCmd.StringVar(&privKey, "privKey", "", "decimal representation of the private key")
+	forgeQuoteCmd.StringVar(&pubKeyPath, "pubKeyPath", "", "path of the public key file in pem format")
+	forgeQuoteCmd.StringVar(&sigOutPath, "sigOutPath", "", "path of the signature generated on the quote")
 
 	flagSets := []*flag.FlagSet{validateKeypairCmd, validateQuoteCmd, forgeQuoteCmd}
 
@@ -104,7 +108,7 @@ func main() {
 			fmt.Println("Signature INVALID")
 		}
 	case "forgeQuote":
-		validateQuoteCmd.Parse(flagSetArgs)
+		forgeQuoteCmd.Parse(flagSetArgs)
 		if len(pcrReadPath) == 0 {
 			log.Fatalf("pcrReadPath undefined")
 		}
@@ -114,7 +118,22 @@ func main() {
 		if len(quotePath) == 0 {
 			log.Fatalf("quotePath undefined")
 		}
-		_, err := readQuote(quotePath)
+		if len(sigOutPath) == 0 {
+			log.Fatalf("sigOutPath undefined")
+		}
+		if len(pubKeyPath) == 0 {
+			log.Fatalf("pubKeyPath undefined")
+		}
+		if len(quoteOutPath) == 0 {
+			log.Fatalf("quoteOutPath undefined")
+		}
+
+		q, err := readQuote(quotePath)
+		if err != nil {
+			log.Fatalf(err.Error())
+		}
+
+		err = forgeQuote(q, pcrReadPath, privKey, pubKeyPath, sigOutPath, quoteOutPath)
 		if err != nil {
 			log.Fatalf(err.Error())
 		}
