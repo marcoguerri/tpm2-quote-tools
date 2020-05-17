@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/asn1"
 	"encoding/binary"
@@ -530,7 +531,7 @@ func forgeQuote(quote *quote, pcrReadPath, privKey, pubKeyPath, sigOutPath, quot
 		return fmt.Errorf("could not load private key for signature: %v", err)
 	}
 
-	r, s, err := ecdsa.Sign(bytes.NewReader([]byte("Not so random entropy...")), ecPriv, quoteHash[:])
+	r, s, err := ecdsa.Sign(rand.Reader, ecPriv, quoteHash[:])
 	if err != nil {
 		return fmt.Errorf("could not sign quote hash: %v", err)
 	}

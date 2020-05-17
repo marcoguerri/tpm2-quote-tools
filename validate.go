@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -87,10 +87,7 @@ func loadKeys(privKey, pubKeyPath string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, 
 
 func validateKeypair(privKey, pubKeyPath string) (*ECKeyPairValidation, error) {
 
-	var (
-		message = []byte("Ed elli avea del cul fatto trombetta")
-		entropy = []byte("Not so random entropy...")
-	)
+	var message = []byte("Ed elli avea del cul fatto trombetta")
 
 	if len(privKey) == 0 {
 		return nil, fmt.Errorf("private key is required")
@@ -114,7 +111,7 @@ func validateKeypair(privKey, pubKeyPath string) (*ECKeyPairValidation, error) {
 	}
 
 	hash := hasher.Sum(nil)
-	r, s, err := ecdsa.Sign(bytes.NewReader(entropy), ecPriv, hash)
+	r, s, err := ecdsa.Sign(rand.Reader, ecPriv, hash)
 	if err != nil {
 		return nil, fmt.Errorf("could not sign message for validation: %v", err)
 	}
