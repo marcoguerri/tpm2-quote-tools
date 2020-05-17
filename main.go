@@ -63,11 +63,32 @@ func main() {
 	}
 
 	flagSetArgs := os.Args[flag.NFlag()+2:]
+	command := os.Args[flag.NFlag()+1]
 
-	switch os.Args[flag.NFlag()+1] {
+	var flagSet *flag.FlagSet
 
+	switch command {
 	case "validateKeypair":
-		validateKeypairCmd.Parse(flagSetArgs)
+		flagSet = validateKeypairCmd
+	case "validateQuote":
+		flagSet = validateQuoteCmd
+	case "forgeQuote":
+		flagSet = forgeQuoteCmd
+	}
+
+	if flagSet == nil {
+		log.Fatalf("unsupported command %s", command)
+	}
+
+	flagSet.Parse(flagSetArgs)
+	flagSet.VisitAll(func(f *flag.Flag) {
+		if f.Value.String() == "" {
+			log.Fatalf("%s is required for command %s", f.Name, command)
+		}
+	})
+
+	switch command {
+	case "validateKeypair":
 		kv, err := validateKeypair(privKey, pubKeyPath)
 		if err != nil {
 			log.Fatalf(err.Error())
@@ -78,17 +99,6 @@ func main() {
 		}
 		fmt.Println(string(m))
 	case "validateQuote":
-		validateQuoteCmd.Parse(flagSetArgs)
-		if len(quotePath) == 0 {
-			log.Fatalf("quote path undefined")
-		}
-		if len(pubKeyPath) == 0 {
-			log.Fatalf("pubKeyPath undefined")
-		}
-		if len(privKey) == 0 {
-			log.Fatalf("privKey undefined")
-		}
-
 		q, err := readQuote(quotePath)
 		if err != nil {
 			log.Fatalf(err.Error())
@@ -98,36 +108,17 @@ func main() {
 			log.Fatalf(fmt.Sprintf("could not marshal result: %v", err))
 		}
 		fmt.Println(string(m))
-		valid, err := validateQuote(q, sigPath, privKey, pubKeyPath)
+		valid, err := validateQuote(q, sigPath, privKey, pubKeyPath, pcrReadPath)
 		if err != nil {
 			log.Fatalf(fmt.Sprintf("could not validate quote: %v", err))
 		}
 		if valid {
-			fmt.Println("Signature OK")
+			fmt.Println("OK")
 		} else {
-			fmt.Println("Signature INVALID")
+			fmt.Println("INVALID")
+			os.Exit(1)
 		}
 	case "forgeQuote":
-		forgeQuoteCmd.Parse(flagSetArgs)
-		if len(pcrReadPath) == 0 {
-			log.Fatalf("pcrReadPath undefined")
-		}
-		if len(privKey) == 0 {
-			log.Fatalf("privKey undefined")
-		}
-		if len(quotePath) == 0 {
-			log.Fatalf("quotePath undefined")
-		}
-		if len(sigOutPath) == 0 {
-			log.Fatalf("sigOutPath undefined")
-		}
-		if len(pubKeyPath) == 0 {
-			log.Fatalf("pubKeyPath undefined")
-		}
-		if len(quoteOutPath) == 0 {
-			log.Fatalf("quoteOutPath undefined")
-		}
-
 		q, err := readQuote(quotePath)
 		if err != nil {
 			log.Fatalf(err.Error())
@@ -137,7 +128,6 @@ func main() {
 		if err != nil {
 			log.Fatalf(err.Error())
 		}
-		fmt.Printf("OK")
 	default:
 		fmt.Println(fmt.Sprintf("command %s not supported", os.Args[1]))
 		flag.Usage()

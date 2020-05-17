@@ -60,6 +60,20 @@ const (
 	tpmAlgNull        = 0x10
 )
 
+func (a algo) String() string {
+	if a == tpmAlgSha1 {
+		return "sha1"
+	} else if a == tpmAlgSha256 {
+		return "sha256"
+	} else if a == tpmAlgSm3256 {
+		return "sm3 256"
+	} else if a == tpmAlgNull {
+		return "null"
+	} else {
+		return "unknown"
+	}
+}
+
 // magic field, TPM_GENERATED
 type magic uint32
 
@@ -120,17 +134,26 @@ func (f *firmwareVersion) MarshalBinary() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// pcrSelect
+// pcrSelect represents a bitfield of pcrs which are selected for the quote
 type pcrSelect []byte
 
-func (p pcrSelect) MarshalJSON() ([]byte, error) {
-	pcrs := make([]string, 0)
+func (p pcrSelect) AsSlice() []int {
+	pcrs := make([]int, 0)
 	for i := 0; i < len(p); i++ {
 		for j := uint8(0); j < 8; j++ {
 			if p[i]&(uint8(0x1)<<j) != 0x0 {
-				pcrs = append(pcrs, fmt.Sprintf("%d", i*8+int(j)))
+				pcrs = append(pcrs, i*8+int(j))
 			}
 		}
+	}
+	return pcrs
+}
+
+func (p pcrSelect) MarshalJSON() ([]byte, error) {
+	pcrsIndexes := p.AsSlice()
+	pcrs := make([]string, 0)
+	for _, index := range pcrsIndexes {
+		pcrs = append(pcrs, fmt.Sprintf("%d", index))
 	}
 	return json.Marshal(strings.Join(pcrs, ","))
 }
@@ -362,7 +385,12 @@ func readQuote(quotePath string) (*quote, error) {
 	return &q, nil
 }
 
-func validateQuote(quote *quote, sigPath, privKey, pubKeyPath string) (bool, error) {
+func validateQuote(quote *quote, sigPath, privKey, pubKeyPath, pcrReadPath string) (bool, error) {
+
+	if quote.QuoteInfo.PcrSelect.PcrSelection.Hash != tpmAlgSha256 {
+		return false, fmt.Errorf("only tpmAlgSha256 supported, but %s found", quote.QuoteInfo.PcrSelect.PcrSelection.Hash.String())
+	}
+
 	quoteSerialized, _ := quote.MarshalBinary()
 	hash := sha256.Sum256(quoteSerialized)
 
@@ -379,26 +407,51 @@ func validateQuote(quote *quote, sigPath, privKey, pubKeyPath string) (bool, err
 	if _, err = asn1.Unmarshal(sigRaw, &sig); err != nil {
 		return false, fmt.Errorf("could not parse signature: %v", err)
 	}
-	log.Debugf("unmarshalled signature, r: %s, s: %s", sig.R().String(), sig.S().String())
+	log.Debugf("ecdsa signature, r: %s, s: %s", sig.R().String(), sig.S().String())
 
 	_, ecPub, err := loadKeys(privKey, pubKeyPath)
+	log.Debugf("validating quote signature with ecPub, X: %s, Y: %s", ecPub.X.String(), ecPub.Y.String())
 	if err != nil {
 		return false, fmt.Errorf("could not load keys: %v", err)
 	}
 
 	valid := ecdsa.Verify(ecPub, hash[:], sig.R(), sig.S())
+
+	if valid {
+		log.Debugf("signature OK")
+	} else {
+		return false, nil
+	}
+
+	log.Debugf("validating pcr hash against %s", pcrReadPath)
+
+	pcrsSelection := quote.QuoteInfo.PcrSelect.PcrSelection.PcrSelect.AsSlice()
+	expectedDigest, err := calculatePcrDigest(pcrReadPath, pcrsSelection)
+	if err != nil {
+		return false, fmt.Errorf("could not calculate expected digest from pcr file: %v", err)
+	}
+
+	quoteDigest, err := quote.QuoteInfo.PcrDigest.Buffer.MarshalBinary()
+	if err != nil {
+		return false, fmt.Errorf("could not extract raw digest from quote")
+	}
+
+	if quote.QuoteInfo.PcrDigest.Buffer.Equal(expectedDigest) {
+		log.Debugf("digest match: 0x%s == 0x%s", hex.EncodeToString(expectedDigest), hex.EncodeToString(quoteDigest))
+		return true, nil
+	}
+
+	log.Debugf("mismatching quoted digest: expected 0x%s, found 0x%s", hex.EncodeToString(expectedDigest), quoteDigest)
+
 	return valid, nil
 }
 
-func calculatePcrDigest(pcrReadPath string) ([]byte, error) {
+func calculatePcrDigest(pcrReadPath string, pcrs []int) ([]byte, error) {
 
-	if len(pcrReadPath) == 0 {
-		return nil, fmt.Errorf("pcr read path not specified")
-	}
-
+	log.Debugf("reading pcr file at %s", pcrReadPath)
 	file, err := os.Open(pcrReadPath)
 	if err != nil {
-		log.Fatal(err)
+		return nil, fmt.Errorf("could not read pcr file: %v", err)
 	}
 	defer file.Close()
 
@@ -406,46 +459,63 @@ func calculatePcrDigest(pcrReadPath string) ([]byte, error) {
 
 	buffer := make([]byte, 0)
 
+	sha256Map := make(map[int64][]byte)
+
+	var pcrMap map[int64][]byte
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		str := scanner.Text()
 		matches := r.FindStringSubmatch(str)
-		if strings.HasPrefix(str, "sha") {
+
+		if strings.HasPrefix(str, "sha1") {
+			pcrMap = nil
+			continue
+		}
+		if strings.HasPrefix(str, "sha256") {
+			pcrMap = sha256Map
 			continue
 		}
 		if len(matches) != 3 {
-			return nil, fmt.Errorf("unexpected match: %s", str)
+			log.Debugf("unexpected match %s", str)
+			continue
 		}
-		pcrHex, err := hex.DecodeString(matches[2])
+
+		if pcrMap == nil {
+			continue
+		}
+
+		pcrValue, err := hex.DecodeString(matches[2])
 		if err != nil {
 			return nil, fmt.Errorf("could not decode pcr value: %s", matches[2])
 		}
-		if len(pcrHex) != 32 {
-			continue
-		}
-		pcrValue, err := strconv.ParseInt(matches[1], 16, 10)
+		pcrIndex, err := strconv.ParseInt(matches[1], 16, 10)
 		if err != nil {
 			return nil, fmt.Errorf("could not parse pcr register number")
 		}
-		if pcrValue == 0 || pcrValue == 1 || pcrValue == 2 || pcrValue == 3 {
-			buffer = append(buffer, pcrHex...)
-		}
+
+		log.Debugf("pcr file: found [%d] : [0x%s]", pcrIndex, hex.EncodeToString(pcrValue))
+		pcrMap[pcrIndex] = pcrValue
 	}
-	sum := sha256.Sum256(buffer)
 
 	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
-	}
-
-	if err != nil {
 		return nil, fmt.Errorf("could not read pcr file: %v", err)
 	}
+
+	for _, pcrIndex := range pcrs {
+		if _, ok := sha256Map[int64(pcrIndex)]; !ok {
+			return nil, fmt.Errorf("pcr index %d not present in sha256 map", pcrIndex)
+		}
+		buffer = append(buffer, sha256Map[int64(pcrIndex)]...)
+	}
+	sum := sha256.Sum256(buffer)
 	return sum[:], nil
 }
 
 func forgeQuote(quote *quote, pcrReadPath, privKey, pubKeyPath, sigOutPath, quoteOutPath string) error {
 
-	pcrHash, err := calculatePcrDigest(pcrReadPath)
+	pcrsSelection := quote.QuoteInfo.PcrSelect.PcrSelection.PcrSelect.AsSlice()
+	pcrHash, err := calculatePcrDigest(pcrReadPath, pcrsSelection)
 	if err != nil {
 		return err
 	}
