@@ -68,6 +68,7 @@ OK
 ```
 
 ## Tamper quote
+Tamper quote can be used to modify the PCR digest in an existing quote, based on a modified pcr file, and re-calculate the signature.
 ```
 ./tpm2-quote-tools -debug forgeQuote -pcrReadPath pcrs.forged -privKey 123...
 2358 -pubKeyPath ak.pub -quotePath quote.out -sigOutPath sigForged.out -quoteOutPath quoteForged.out
