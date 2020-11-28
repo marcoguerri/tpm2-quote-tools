@@ -1,8 +1,11 @@
 # tpm2-quote-tools
 This is a simple tool to read and manipulate TPM2 quotes. It was written while experimenting with [tpmfail](https://tpm.fail/). It supports the following commands:
-* Validating an ECDSA keypair, where the pub key is serialized according to RFC5480 and the priv key is provided with its integer representation
+
+* Validating an EC keypair, where the pub key is serialized according to RFC5480 and the priv key is provided with its integer representation
 * Validating a TPM quote, given a PCR file reading
 * Tampering a quote, based on a modified PCR file
+
+It assumes to be working with a NIST P-256 Curve.
 
 ### Validate ECDSA keypair
 ```
