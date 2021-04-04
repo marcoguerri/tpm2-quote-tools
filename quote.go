@@ -332,9 +332,7 @@ func readQuote(quotePath string) (*quote, error) {
 		return nil, fmt.Errorf("could not read magic number from quote file")
 	}
 	if q.Magic != tpmGeneratedValue {
-		return nil,
-
-			fmt.Errorf("quote doesn't start with TPM_GENERATED_VALUE: %x", q.Magic)
+		return nil, fmt.Errorf("quote doesn't start with TPM_GENERATED_VALUE: %x", q.Magic)
 	}
 
 	// type
@@ -407,6 +405,9 @@ func readQuote(quotePath string) (*quote, error) {
 
 func validateQuote(quote *quote, sigPath, privKey, pubKeyPath, pcrReadPath string) (bool, error) {
 
+	if quote.Magic != tpmGeneratedValue {
+		return false, fmt.Errorf("quote doesn't start with TPM_GENERATED_VALUE: %x", quote.Magic)
+	}
 	if quote.QuoteInfo.PcrSelect.PcrSelection.Hash != tpmAlgSha256 {
 		return false, fmt.Errorf("only tpmAlgSha256 supported, but %s found", quote.QuoteInfo.PcrSelect.PcrSelection.Hash.String())
 	}
