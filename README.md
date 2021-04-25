@@ -38,7 +38,7 @@ case ECDSA:
         }
 ```
 
-where `namedCurveOID` is eventually used to build the right curse, e.g. `elliptic.P256(). This
+where `namedCurveOID` is eventually used to build the right curse, e.g. `elliptic.P256()`. This
 problem should be coming solely from the tooling, but I haven't investigated it further.
 
 
