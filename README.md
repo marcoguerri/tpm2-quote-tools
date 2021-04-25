@@ -11,10 +11,10 @@ It assumes to be working with a NIST P-256 Curve.
 
 The assumption to be working with P-256 comes from the fact that the `SubjectPublicKeyInfo` structure
 produced by tpm2-tools (at least version 4.0-rc2, which was the one I used to extract 
-[ak.pub]([ak.pub](https://github.com/marcoguerri/tpm2-quote-tools/blob/master/data/ak.pub) and experiment with tpmfail) 
+[ak.pub](https://github.com/marcoguerri/tpm2-quote-tools/blob/master/data/ak.pub) and experiment with tpmfail) 
 doesn't seem  to be fully compliant with PKIX and cannot be unmarshalled with `ParsePKIXPublicKey`.
 
-PKIX (RFC5280) format requires the following format:
+PKIX (RFC5280) requires the following format:
 ```
 type publicKeyInfo struct {
     Raw       asn1.RawContent
@@ -38,7 +38,7 @@ case ECDSA:
         }
 ```
 
-where `namedCurveOID` is eventually used to build the right, e.g. `elliptic.P256(). This
+where `namedCurveOID` is eventually used to build the right curse, e.g. `elliptic.P256(). This
 problem should be coming solely from the tooling, but I haven't investigated it further.
 
 
