@@ -7,6 +7,41 @@ This is a simple tool to read and manipulate TPM2 quotes. It was written while e
 
 It assumes to be working with a NIST P-256 Curve.
 
+### P-256 assumption
+
+The assumption to be working with P-256 comes from the fact that the `SubjectPublicKeyInfo` structure
+produced by tpm2-tools (at least version 4.0-rc2, which was the one I used to extract 
+[ak.pub]([ak.pub](https://github.com/marcoguerri/tpm2-quote-tools/blob/master/data/ak.pub) and experiment with tpmfail) 
+doesn't seem  to be fully compliant with PKIX and cannot be unmarshalled with `ParsePKIXPublicKey`.
+
+PKIX (RFC5280) format requires the following format:
+```
+type publicKeyInfo struct {
+    Raw       asn1.RawContent
+    Algorithm pkix.AlgorithmIdentifier
+    PublicKey asn1.BitString
+}
+```
+
+`ParsePKIXPublicKey` is failing with "failed to parse ECDSA parameters as named curve",
+which seems to be deriving from trying to extract the curve type from
+ `Algorithm.Parameters.FullBytes` in the `pkix.AlgorithmIdentifier` object. In particular,
+from [x509.go](https://golang.org/src/crypto/x509/x509.go):
+
+```
+case ECDSA:
+        paramsData := keyData.Algorithm.Parameters.FullBytes
+        namedCurveOID := new(asn1.ObjectIdentifier)
+        rest, err := asn1.Unmarshal(paramsData, namedCurveOID)
+        if err != nil {
+            return nil, errors.New("x509: failed to parse ECDSA parameters as named curve")
+        }
+```
+
+where `namedCurveOID` is eventually used to build the right, e.g. `elliptic.P256(). This
+problem should be coming solely from the tooling, but I haven't investigated it further.
+
+
 ### Validate ECDSA keypair
 ```
  ./tpm2-quote-tools validateKeypair -privKey 123.... --pubKeyPath ak.pub
